@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Food Deals</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">₹</span>
+      <div>
+        <h1>Food Deals</h1>
+        <p class="sub">Cheapest food & best offers across Swiggy and Zomato, decided for you.</p>
+      </div>
+    </div>
+    <div class="conns" id="conns"></div>
+  </header>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <main class="layout">
+    <section class="left">
+      <form id="searchForm" class="search">
+        <input id="q" type="search" placeholder="Search a dish, e.g. burger, biryani, pizza" autocomplete="off" />
+        <button type="submit" class="btn primary">Search</button>
+      </form>
+
+      <div class="addrs" id="addrs"></div>
+
+      <div class="filters">
+        <div class="seg" id="vegSeg">
+          <button data-veg="" class="on">All</button>
+          <button data-veg="true">Veg</button>
+          <button data-veg="nonveg">Non-veg</button>
+        </div>
+        <label>Max ₹ <input id="maxPrice" type="number" min="0" step="10" placeholder="any" /></label>
+        <label>Rating ≥ <select id="minRating"><option value="">any</option><option>3.5</option><option>4</option><option>4.3</option></select></label>
+        <label>Within <select id="maxEta"><option value="">any</option><option value="25">25 min</option><option value="35">35 min</option><option value="45">45 min</option></select></label>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button data-tab="cheapest" class="on">Cheapest</button>
+        <button data-tab="compare">Swiggy vs Zomato</button>
+        <button data-tab="offers">Top offers today</button>
+      </nav>
+
+      <div id="notice" class="notice" hidden></div>
+      <div id="results" class="results"></div>
+    </section>
+
+    <aside class="right">
+      <div class="ai">
+        <div class="ai-head">
+          <div>
+            <h2>Ask the deal finder</h2>
+            <p class="muted" id="aiState">Ask in plain words. It checks both apps and picks for you.</p>
+          </div>
+        </div>
+        <div class="chips" id="chips">
+          <button>Lowest price burgers today</button>
+          <button>Which shop has the highest offer today?</button>
+          <button>Best chicken biryani under ₹300</button>
+          <button>Cheapest veg dinner within 30 min</button>
+          <button>Is pizza cheaper on Swiggy or Zomato?</button>
+        </div>
+        <div class="chat" id="chat"></div>
+        <form id="askForm" class="ask">
+          <input id="askInput" placeholder="e.g. cheapest burger with 4+ rating" autocomplete="off" />
+          <button class="btn primary" type="submit">Ask</button>
+        </form>
+      </div>
+    </aside>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
