@@ -4,6 +4,8 @@ import { createCatalog } from "./engine/catalog.js";
 import { McpPlatform, MCP_SERVERS } from "./providers/mcp.js";
 import { createDealFinder, describeAiError } from "./ai/dealFinder.js";
 import { aiAvailable } from "./ai/claude.js";
+import { createSwiggyLive } from "./providers/swiggyLive.js";
+import { createSwiggyOrder } from "./providers/swiggyOrder.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const REDIRECT = `http://localhost:${PORT}/callback`;
@@ -11,6 +13,7 @@ const REDIRECT = `http://localhost:${PORT}/callback`;
 const live = Object.fromEntries(Object.keys(MCP_SERVERS).map((p) => [p, new McpPlatform(p, REDIRECT)]));
 const catalog = createCatalog({ live });
 const finder = createDealFinder({ catalog, live });
+const swiggyOrder = createSwiggyOrder(live.swiggy, createSwiggyLive(live.swiggy));
 
 const app = express();
 app.use(express.json());
@@ -49,6 +52,15 @@ app.post("/api/:platform/address", wrap(async (req) => {
   catalog.setAddress(p, req.body.id);
   return { selected: req.body.id };
 }));
+
+// ---- Order on Swiggy from the UI (cart → bill → Pay on delivery) ----
+const needSwiggy = () => {
+  if (!live.swiggy.connected) throw new Error("Swiggy is not connected");
+};
+app.get("/api/swiggy/cart", wrap(() => (needSwiggy(), swiggyOrder.cart())));
+app.post("/api/swiggy/cart", wrap((req) => (needSwiggy(), swiggyOrder.setItem(req.body ?? {}))));
+app.post("/api/swiggy/cart/clear", wrap(() => (needSwiggy(), swiggyOrder.clear())));
+app.post("/api/swiggy/order", wrap((req) => (needSwiggy(), swiggyOrder.place(req.body ?? {}))));
 
 // ---- Sign in to Swiggy / Zomato (official OAuth via their MCP servers) ----
 app.post("/api/connect/:platform", wrap(async (req) => {

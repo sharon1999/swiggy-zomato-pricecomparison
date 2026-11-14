@@ -195,6 +195,36 @@ h2 { font-size: 16px; margin: 0; }
 .confirm .row { justify-content: flex-start; }
 .ask { display: flex; gap: 8px; }
 
+/* ---------- order / cart ---------- */
+.right { display: flex; flex-direction: column; gap: 12px; }
+.btn.order { padding: 8px 12px; font-size: 13px; border-color: var(--swiggy); color: var(--swiggy); background: var(--swiggy-soft); }
+.btn.order:hover { background: var(--swiggy); color: #fff; }
+.cartbox {
+  background: var(--panel); border: 2px solid var(--swiggy); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 14px 16px; display: grid; gap: 10px;
+}
+.cartbox[hidden] { display: none; }
+.cartbox h2 { display: flex; align-items: center; gap: 8px; }
+.cart-item { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.cart-item img, .cart-item .noimg { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; background: var(--bg); }
+.cart-item .name { font-weight: 600; font-size: 14px; display: flex; gap: 6px; }
+.cart-item .opts { font-size: 12px; color: var(--muted); }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.stepper button { border: 0; background: var(--bg); width: 28px; height: 28px; cursor: pointer; font-weight: 700; }
+.stepper span { min-width: 26px; text-align: center; font-weight: 600; font-size: 13px; }
+.bill { display: grid; gap: 3px; font-size: 13px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 8px; }
+.bill .row { justify-content: space-between; }
+.bill .pay { color: var(--ink); font-weight: 800; font-size: 16px; }
+.cartbox .deliver { font-size: 12px; color: var(--muted); }
+.cartbox input.note { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); width: 100%; font-size: 13px; }
+.cartbox .paymethod { font-size: 13px; }
+.cartbox .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cartbox .actions .btn { flex: 1; }
+.linkbtn { background: none; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 12px; padding: 0; justify-self: start; }
+.final { background: var(--warn-soft); color: var(--ink); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.done { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.cart-err { background: var(--zomato-soft); color: var(--zomato); border-radius: 10px; padding: 8px 12px; font-size: 13px; white-space: pre-wrap; }
+
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
   padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 10; max-width: calc(100% - 32px);

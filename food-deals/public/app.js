@@ -21,6 +21,7 @@ async function loadStatus() {
     .join("") +
     `<div class="conn"><span class="dot ${ai ? "live" : ""}"></span><b>AI</b> ${ai ? "On" : "Off"}&nbsp;</div>`;
   loadAddresses();
+  loadCart();
   $("#aiState").textContent = ai
     ? "Ask in plain words. It checks both apps and picks for you."
     : "AI is off. Add ANTHROPIC_API_KEY to .env and restart. Search still works.";
@@ -76,6 +77,7 @@ $("#addrs").addEventListener("change", async (e) => {
   if (!p) return;
   await fetch(`/api/${p}/address`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: e.target.value }) });
   loadAddresses();
+  if (p === "swiggy") loadCart();
   run();
 });
 
@@ -112,8 +114,10 @@ function itemCard(i, { best = false, mini = false } = {}) {
     ${offer}
     ${mini ? "" : breakdown}
     <div class="meta"><span>★ ${i.rating ?? "–"}</span><span>${i.etaMins ? `${i.etaMins} min` : ""}</span>${i.source === "demo" ? `<span class="tag-demo">demo</span>` : `<span class="tag-live">live</span>`}</div>
+    ${canOrder(i) && !mini ? `<button class="btn order" data-order data-rid="${esc(i.restaurantId)}" data-rname="${esc(i.restaurant)}" data-mid="${esc(i.menuItemId)}" data-dish="${esc(i.dish)}">Order on Swiggy</button>` : ""}
   </div>`;
 }
+const canOrder = (i) => i.platform === "swiggy" && i.source === "live" && i.restaurantId && i.menuItemId;
 
 function side(i, win) {
   if (!i) return `<div class="side"><span class="muted">Not listed</span></div>`;
@@ -214,6 +218,187 @@ $("#vegSeg").addEventListener("click", (e) => {
   run();
 });
 for (const id of ["maxPrice", "minRating", "maxEta"]) $(`#${id}`).addEventListener("change", run);
+
+// ---------- order on Swiggy ----------
+// The cart lives on Swiggy (same cart as the Swiggy app). This panel shows it,
+// lets you change quantity, and places the order with Pay on delivery after
+// an explicit final "Yes, place order".
+const cart = { data: null, busy: false, confirming: false, replaceWith: null, result: null, error: null, note: "" };
+
+async function api(url, body) {
+  const res = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j.error && !j.failed && !j.uncertain) throw new Error(j.error || `HTTP ${res.status}`);
+  return j;
+}
+
+async function loadCart() {
+  if (state.status?.platforms?.swiggy?.status !== "connected") {
+    cart.data = null;
+    return renderCart();
+  }
+  try {
+    cart.data = await api("/api/swiggy/cart");
+    cart.error = null;
+  } catch (err) {
+    cart.data = null;
+    cart.error = `Couldn't read your Swiggy cart: ${err.message}`;
+  }
+  renderCart();
+}
+
+async function setCartItem(item, quantity, replace = false) {
+  cart.busy = true;
+  cart.confirming = false;
+  cart.error = null;
+  cart.result = null;
+  renderCart();
+  try {
+    const r = await api("/api/swiggy/cart", { ...item, quantity, replace });
+    cart.data = r.cart;
+    cart.replaceWith = r.needsReplace ? item : null;
+    if (!r.needsReplace && quantity > 0) toast(`${item.dish ?? "Item"} is in your Swiggy cart`);
+  } catch (err) {
+    cart.error = `Couldn't update your Swiggy cart: ${err.message}`;
+    cart.replaceWith = null;
+    await loadCart();
+  } finally {
+    cart.busy = false;
+    renderCart();
+    $("#cart").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+async function placeOrder() {
+  cart.busy = true;
+  cart.error = null;
+  renderCart();
+  try {
+    const r = await api("/api/swiggy/order", { expectedTotal: cart.data.pricing.toPay, note: cart.note, confirm: true });
+    if (r.priceChanged) {
+      cart.data = r.cart;
+      cart.error = `The total changed to ${rs(r.cart.pricing?.toPay ?? 0)}. Check the bill and place again.`;
+    } else if (r.failed) {
+      cart.error = r.error;
+    } else {
+      cart.result = r;
+      cart.note = "";
+    }
+  } catch (err) {
+    cart.error = err.message;
+  } finally {
+    cart.busy = false;
+    cart.confirming = false;
+    renderCart();
+  }
+}
+
+function renderCart() {
+  const el = $("#cart");
+  const d = cart.data;
+  const dis = cart.busy ? "disabled" : "";
+  let html = "";
+
+  if (cart.result) {
+    const r = cart.result;
+    html = r.uncertain
+      ? `<div class="cart-err"><b>Order status unknown.</b> ${esc(r.error)}${r.active ? `\n\nActive orders on Swiggy:\n${esc(r.active)}` : ""}</div>`
+      : `<div class="done"><b>${r.pending ? "Waiting for payment" : "✅ Swiggy order placed"}</b>
+           ${r.message ? `<div class="muted">${esc(r.message)}</div>` : ""}
+           ${r.orderId ? `<div class="muted">Order ID ${esc(r.orderId)}</div>` : ""}
+           <div class="muted">Pay on delivery, or pay in the Swiggy app any time before it arrives.</div>
+         </div>`;
+    html += `<div class="actions">${r.trackUrl ? `<a class="btn primary" href="${esc(r.trackUrl)}" target="_blank" rel="noopener">Track order</a>` : ""}<button class="btn" data-cart="dismiss">Done</button></div>`;
+  } else if (d?.items?.length) {
+    const editable = d.restaurantId && d.items.length === 1 && !d.items[0].options.length;
+    const p = d.pricing;
+    html = `<h2><span class="plat swiggy">Swiggy</span> Your cart${d.restaurantName ? ` · ${esc(d.restaurantName)}` : ""}</h2>`;
+    if (cart.replaceWith) {
+      html += `<div class="final">Your Swiggy cart already has ${d.items.map((i) => `<b>${esc(i.name)}</b>`).join(", ")}. Ordering <b>${esc(cart.replaceWith.dish)}</b> will remove ${d.items.length > 1 ? "them" : "it"}.
+        <div class="actions" style="margin-top:8px"><button class="btn primary" data-cart="replace" ${dis}>Replace cart</button><button class="btn" data-cart="keep" ${dis}>Keep current cart</button></div></div>`;
+    }
+    html += d.items
+      .map(
+        (i) => `<div class="cart-item">
+          ${i.imageUrl ? `<img src="${esc(i.imageUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="noimg"></span>`}
+          <div><div class="name"><span class="veg ${i.veg ? "" : "non"}"></span>${esc(i.name)}</div>
+            <div class="opts">${i.options.length ? esc(i.options.join(", ")) + " · " : ""}${rs(i.total)}${i.inStock ? "" : " · out of stock"}</div></div>
+          ${editable
+            ? `<div class="stepper"><button data-cart="dec" ${dis} aria-label="One less">−</button><span>${i.quantity}</span><button data-cart="inc" ${dis} aria-label="One more">+</button></div>`
+            : `<span class="muted">× ${i.quantity}</span>`}
+        </div>`,
+      )
+      .join("");
+    if (p) {
+      html += `<div class="bill">
+        <div class="row"><span>Item total</span><span>${rs(p.itemTotal)}</span></div>
+        <div class="row"><span>Delivery</span><span>${p.delivery ? rs(p.delivery) : `FREE${p.deliveryStrike ? ` <s>${rs(p.deliveryStrike)}</s>` : ""}`}</span></div>
+        <div class="row"><span>Taxes & charges</span><span>₹${p.taxes}</span></div>
+        ${d.couponDiscount ? `<div class="row"><span>Coupon</span><span>− ${rs(d.couponDiscount)}</span></div>` : ""}
+        <div class="row pay"><span>To pay</span><span>${rs(p.toPay)}</span></div>
+      </div>`;
+    }
+    if (d.deliverTo) html += `<div class="deliver">🛵 ${esc(d.deliverTo)}</div>`;
+    html += `<input class="note" id="cartNote" maxlength="200" placeholder="Note to restaurant (optional), e.g. less spicy" value="${esc(cart.note)}" ${dis} />
+      <div class="paymethod">💵 <b>Pay on delivery</b> <span class="muted">(or pay in the Swiggy app before it arrives)</span></div>`;
+    if (cart.error) html += `<div class="cart-err">${esc(cart.error)}</div>`;
+    if (!p) {
+      html += `<div class="muted">Swiggy didn't return a bill for this cart.</div>`;
+    } else if (cart.confirming) {
+      html += `<div class="final">Place a <b>real Swiggy order</b> for <b>${rs(p.toPay)}</b>, Pay on delivery${d.deliverTo ? `, delivered to <b>${esc(d.deliverTo.replace(/^.*? to /, ""))}</b>` : ""}?
+        <div class="actions" style="margin-top:8px"><button class="btn primary" data-cart="yes" ${dis}>${cart.busy ? "Placing…" : "Yes, place order"}</button><button class="btn" data-cart="back" ${dis}>Back</button></div></div>`;
+    } else if (!cart.replaceWith) {
+      html += `<div class="actions"><button class="btn primary" data-cart="place" ${dis}>Place order · ${rs(p.toPay)}</button></div>`;
+    }
+    html += `<button class="linkbtn" data-cart="clear" ${dis}>Empty cart</button>`;
+    if (cart.busy && !cart.confirming) html += `<div class="status"><span class="spin"></span><span>Talking to Swiggy…</span></div>`;
+  } else if (cart.error || cart.busy) {
+    html = cart.busy ? `<div class="status"><span class="spin"></span><span>Talking to Swiggy…</span></div>` : `<div class="cart-err">${esc(cart.error)}</div>`;
+  }
+
+  el.hidden = !html;
+  el.innerHTML = html;
+}
+
+$("#results").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-order]");
+  if (!b || cart.busy) return;
+  const item = { restaurantId: b.dataset.rid, restaurantName: b.dataset.rname, menuItemId: b.dataset.mid, dish: b.dataset.dish };
+  const same = cart.data?.items?.length === 1 && cart.data.items[0].menuItemId === item.menuItemId;
+  setCartItem(item, same ? Math.min(10, cart.data.items[0].quantity + 1) : 1);
+});
+
+$("#cart").addEventListener("input", (e) => {
+  if (e.target.id === "cartNote") cart.note = e.target.value;
+});
+
+$("#cart").addEventListener("click", async (e) => {
+  const a = e.target.closest("[data-cart]")?.dataset.cart;
+  if (!a || cart.busy) return;
+  const d = cart.data;
+  const current = d?.items?.[0] && { restaurantId: d.restaurantId, restaurantName: d.restaurantName, menuItemId: d.items[0].menuItemId, dish: d.items[0].name };
+  if (a === "replace") return setCartItem(cart.replaceWith, 1, true);
+  if (a === "keep") { cart.replaceWith = null; return renderCart(); }
+  if (a === "inc") return setCartItem(current, Math.min(10, d.items[0].quantity + 1));
+  if (a === "dec") return setCartItem(current, d.items[0].quantity - 1);
+  if (a === "place") { cart.confirming = true; cart.error = null; return renderCart(); }
+  if (a === "back") { cart.confirming = false; return renderCart(); }
+  if (a === "yes") return placeOrder();
+  if (a === "dismiss") { cart.result = null; return loadCart(); }
+  if (a === "clear") {
+    cart.busy = true;
+    renderCart();
+    try {
+      cart.data = (await api("/api/swiggy/cart/clear", {})).cart;
+      cart.replaceWith = null;
+      cart.error = null;
+    } catch (err) {
+      cart.error = `Couldn't empty the cart: ${err.message}`;
+    }
+    cart.busy = false;
+    renderCart();
+  }
+});
 
 // ---------- AI chat ----------
 function md(text) {
