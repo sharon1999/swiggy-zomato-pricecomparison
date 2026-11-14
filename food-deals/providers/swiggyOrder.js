@@ -1,17 +1,25 @@
 // Ordering from the UI on Swiggy, using the official Swiggy MCP cart/order tools.
 //
 // Kept deliberately simple and safe:
-// - "Order" makes the cart exactly one dish (× quantity). If your Swiggy cart
-//   already holds something else, the UI must ask before it is replaced.
+// - A Swiggy cart holds dishes from ONE restaurant. Adding a dish from the same
+//   restaurant adds it to the cart; a different restaurant (or a cart this app
+//   didn't build) needs the user's OK before the cart is replaced.
+// - Every cart change writes the whole item list (flush, then update), so the
+//   result doesn't depend on whether Swiggy merges or replaces on update.
+// - Dishes with size/variant choices aren't added here (no picker yet).
 // - Payment is Pay on delivery only (no UPI polling yet).
 // - Placing re-reads the cart and refuses if the total changed since you saw it.
 // - One order at a time, and a failed/timed-out order is never retried
 //   automatically (it may have gone through): we check active orders instead.
 
 const firstLine = (t) => String(t ?? "").split("\n").find((l) => l.trim())?.trim().slice(0, 300) ?? "";
+const MAX_QTY = 10;
+const MAX_LINES = 15;
 
 export function createSwiggyOrder(conn, swiggyLive) {
   let placing = false;
+  let writing = Promise.resolve(); // serialise cart writes
+  const menuCache = new Map(); // restaurantId -> { at, menu }
 
   async function call(name, args) {
     const r = await conn.callTool(name, args);
@@ -33,14 +41,13 @@ export function createSwiggyOrder(conn, swiggyLive) {
       inStock: it.in_stock !== 0,
       options: [...(it.variants ?? []), ...(it.addons ?? [])].map((v) => v.name).filter(Boolean),
     }));
-    // The cart API doesn't return the restaurant id. We know it only if this
-    // app put exactly these items in the cart.
+    // The cart API doesn't return the restaurant id. We know it only when this
+    // app built the cart: every item in it is one we put there, with no options.
     const s = saved();
     const ours =
       items.length > 0 &&
       Array.isArray(s.itemIds) &&
-      s.itemIds.length === items.length &&
-      items.every((i) => s.itemIds.includes(i.menuItemId));
+      items.every((i) => s.itemIds.includes(i.menuItemId) && !i.options.length);
     const p = d.pricing;
     return {
       items,
@@ -63,7 +70,8 @@ export function createSwiggyOrder(conn, swiggyLive) {
 
   async function cart() {
     const addressId = await swiggyLive.addressId();
-    const r = await conn.callTool("get_food_cart", { addressId, ...(saved().restaurantName ? { restaurantName: saved().restaurantName } : {}) });
+    const name = saved().restaurantName;
+    const r = await conn.callTool("get_food_cart", { addressId, ...(name ? { restaurantName: name } : {}) });
     if (r.isError) {
       if (/empty|no items|not found/i.test(r.text)) return shape(null);
       throw new Error(firstLine(r.text) || "Couldn't read your Swiggy cart");
@@ -71,38 +79,132 @@ export function createSwiggyOrder(conn, swiggyLive) {
     return shape(r);
   }
 
-  /** Make the cart exactly this one dish × quantity (0 empties the cart). */
-  async function setItem({ restaurantId, restaurantName, menuItemId, quantity = 1, replace = false }) {
+  /** Make the Swiggy cart exactly `lines` ([{ menuItemId, quantity }]) from one restaurant. */
+  async function write(restaurantId, restaurantName, lines, { hadItems, previous }) {
+    if (hadItems) await call("flush_food_cart", {});
+    if (!lines.length) {
+      conn.auth._set({ cart: {} });
+      return;
+    }
+    const addressId = await swiggyLive.addressId();
+    const send = (ls) =>
+      call("update_food_cart", {
+        restaurantId,
+        addressId,
+        ...(restaurantName ? { restaurantName: String(restaurantName).slice(0, 120) } : {}),
+        cartItems: ls.map((l) => ({ menu_item_id: l.menuItemId, quantity: l.quantity })),
+      });
+    try {
+      await send(lines);
+    } catch (err) {
+      // Put the previous items back so a failed add doesn't empty the cart.
+      if (previous?.length) await send(previous).catch(() => {});
+      else conn.auth._set({ cart: {} });
+      throw err;
+    }
+    conn.auth._set({
+      cart: { restaurantId, restaurantName: restaurantName ?? null, itemIds: lines.map((l) => l.menuItemId) },
+    });
+  }
+
+  // Cart writes run one at a time so two quick clicks can't interleave.
+  const serial = (fn) => (...args) => {
+    const run = writing.then(() => fn(...args));
+    writing = run.catch(() => {});
+    return run;
+  };
+
+  const linesOf = (c) => c.items.map((i) => ({ menuItemId: i.menuItemId, quantity: i.quantity }));
+
+  /** Add one of a dish. Same restaurant: added to the cart. Otherwise asks before replacing. */
+  const addItem = serial(async ({ restaurantId, restaurantName, menuItemId, replace = false }) => {
     if (typeof restaurantId !== "string" || typeof menuItemId !== "string" || !restaurantId || !menuItemId) {
       throw new Error("Missing restaurant or dish");
     }
-    const qty = Number(quantity);
-    if (!Number.isInteger(qty) || qty < 0 || qty > 10) throw new Error("Quantity must be 0 to 10");
-
     const cur = await cart();
-    const onlyThis = cur.items.length === 1 && cur.items[0].menuItemId === menuItemId && !cur.items[0].options.length;
-    if (cur.items.length && !onlyThis && !replace) return { needsReplace: true, cart: cur };
+    const sameRestaurant = cur.items.length > 0 && cur.restaurantId === restaurantId;
 
-    if (cur.items.length) await call("flush_food_cart", {});
-    if (qty === 0) {
-      conn.auth._set({ cart: {} });
-      return { cart: await cart() };
+    if (cur.items.length && !sameRestaurant && !replace) {
+      return {
+        needsReplace: true,
+        reason: cur.restaurantId ? "otherRestaurant" : "notFromApp",
+        cart: cur,
+      };
     }
-    const addressId = await swiggyLive.addressId();
-    await call("update_food_cart", {
-      restaurantId,
-      addressId,
-      ...(restaurantName ? { restaurantName: String(restaurantName).slice(0, 120) } : {}),
-      cartItems: [{ menu_item_id: menuItemId, quantity: qty }],
-    });
-    conn.auth._set({ cart: { restaurantId, restaurantName: restaurantName ?? null, itemIds: [menuItemId] } });
-    return { cart: await cart() };
-  }
 
-  async function clear() {
+    let lines = sameRestaurant ? linesOf(cur) : [];
+    const existing = lines.find((l) => l.menuItemId === menuItemId);
+    if (existing) {
+      if (existing.quantity >= MAX_QTY) throw new Error(`Max ${MAX_QTY} of one dish`);
+      existing.quantity += 1;
+    } else {
+      if (lines.length >= MAX_LINES) throw new Error(`Max ${MAX_LINES} different dishes`);
+      lines.push({ menuItemId, quantity: 1 });
+    }
+    const name = sameRestaurant ? cur.restaurantName ?? restaurantName : restaurantName;
+    await write(restaurantId, name, lines, { hadItems: cur.items.length > 0, previous: sameRestaurant ? linesOf(cur) : null });
+    return { cart: await cart() };
+  });
+
+  /** Change the quantity of a dish already in an app-built cart (0 removes it). */
+  const setQuantity = serial(async ({ menuItemId, quantity }) => {
+    const qty = Number(quantity);
+    if (!Number.isInteger(qty) || qty < 0 || qty > MAX_QTY) throw new Error(`Quantity must be 0 to ${MAX_QTY}`);
+    const cur = await cart();
+    if (!cur.restaurantId) throw new Error("This cart was set up in the Swiggy app; change it there");
+    const lines = linesOf(cur);
+    const line = lines.find((l) => l.menuItemId === String(menuItemId));
+    if (!line) throw new Error("That dish isn't in your cart any more");
+    line.quantity = qty;
+    const next = lines.filter((l) => l.quantity > 0);
+    await write(cur.restaurantId, cur.restaurantName, next, { hadItems: true, previous: linesOf(cur) });
+    return { cart: await cart() };
+  });
+
+  const clear = serial(async () => {
     await call("flush_food_cart", {});
     conn.auth._set({ cart: {} });
     return { cart: await cart() };
+  });
+
+  /** A restaurant's menu, flattened to what the "add more" list needs. */
+  async function menu(restaurantId) {
+    if (typeof restaurantId !== "string" || !/^\d+$/.test(restaurantId)) throw new Error("Bad restaurant id");
+    const hit = menuCache.get(restaurantId);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.menu;
+    const addressId = await swiggyLive.addressId();
+    const pages = [];
+    for (let page = 1; page <= 3; page++) {
+      const r = await call("get_restaurant_menu", { restaurantId, addressId, page, pageSize: 8 });
+      pages.push(r.structured ?? {});
+      if (!r.structured?.hasMore) break;
+    }
+    const rest = pages[0].restaurant ?? {};
+    const seen = new Set();
+    const categories = pages
+      .flatMap((p) => p.categories ?? [])
+      .map((c) => ({
+        name: c.name ?? c.title ?? "Menu",
+        items: (c.items ?? (c.subcategories ?? []).flatMap((s) => s.items ?? []))
+          .filter((it) => it?.id != null && !seen.has(String(it.id)) && seen.add(String(it.id)))
+          .map((it) => ({
+            menuItemId: String(it.id),
+            name: it.name,
+            price: it.price,
+            veg: !!it.isVeg,
+            inStock: !!it.inStock,
+            needsChoice: !!it.hasVariants,
+            bestseller: !!it.isBestseller,
+            imageUrl: it.imageUrl ?? null,
+          })),
+      }))
+      .filter((c) => c.items.length);
+    const out = {
+      restaurant: { id: String(rest.id ?? restaurantId), name: rest.name ?? null, isOpen: rest.isOpen !== false, eta: rest.slaString ?? null },
+      categories,
+    };
+    menuCache.set(restaurantId, { at: Date.now(), menu: out });
+    return out;
   }
 
   async function activeOrders() {
@@ -117,16 +219,17 @@ export function createSwiggyOrder(conn, swiggyLive) {
     if (placing) throw new Error("An order is already being placed");
     placing = true;
     try {
+      await writing; // never place while a cart change is still running
       const cur = await cart();
       if (!cur.items.length) throw new Error("Your Swiggy cart is empty");
       if (!cur.pricing || cur.pricing.toPay !== Number(expectedTotal)) return { priceChanged: true, cart: cur };
 
-      const pay = await call("get_payment_options", { addressId: await swiggyLive.addressId() });
+      const addressId = await swiggyLive.addressId();
+      const pay = await call("get_payment_options", { addressId });
       if (!pay.structured?.cod?.available) {
         return { failed: true, error: "Swiggy isn't offering Pay on delivery for this cart. Finish this order in the Swiggy app." };
       }
 
-      const addressId = await swiggyLive.addressId();
       const args = { addressId, paymentMethod: "Cash" };
       const trimmed = typeof note === "string" ? note.trim().slice(0, 200) : "";
       if (trimmed) args.noteToRestaurant = trimmed;
@@ -162,5 +265,5 @@ export function createSwiggyOrder(conn, swiggyLive) {
     }
   }
 
-  return { cart, setItem, clear, place };
+  return { cart, addItem, setQuantity, clear, menu, place };
 }

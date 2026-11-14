@@ -221,9 +221,12 @@ for (const id of ["maxPrice", "minRating", "maxEta"]) $(`#${id}`).addEventListen
 
 // ---------- order on Swiggy ----------
 // The cart lives on Swiggy (same cart as the Swiggy app). This panel shows it,
-// lets you change quantity, and places the order with Pay on delivery after
-// an explicit final "Yes, place order".
-const cart = { data: null, busy: false, confirming: false, replaceWith: null, result: null, error: null, note: "" };
+// lets you add dishes from the same restaurant and change quantities, and places
+// the order with Pay on delivery after an explicit final "Yes, place order".
+const cart = {
+  data: null, busy: false, confirming: false, replaceWith: null, result: null, error: null, note: "",
+  menu: null, menuOpen: false, menuLoading: false,
+};
 
 async function api(url, body) {
   const res = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -247,26 +250,55 @@ async function loadCart() {
   renderCart();
 }
 
-async function setCartItem(item, quantity, replace = false) {
+/** Run a cart change on the server, then show the cart it returns. */
+async function cartAction(fn, { scroll = true } = {}) {
   cart.busy = true;
   cart.confirming = false;
   cart.error = null;
   cart.result = null;
   renderCart();
   try {
-    const r = await api("/api/swiggy/cart", { ...item, quantity, replace });
-    cart.data = r.cart;
-    cart.replaceWith = r.needsReplace ? item : null;
-    if (!r.needsReplace && quantity > 0) toast(`${item.dish ?? "Item"} is in your Swiggy cart`);
+    return await fn();
   } catch (err) {
-    cart.error = `Couldn't update your Swiggy cart: ${err.message}`;
-    cart.replaceWith = null;
+    cart.error = err.message;
     await loadCart();
   } finally {
     cart.busy = false;
+    if (cart.menu && cart.menu.restaurant.id !== cart.data?.restaurantId) { cart.menu = null; cart.menuOpen = false; }
     renderCart();
-    $("#cart").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (scroll) $("#cart").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
+}
+
+const addToCart = (item, replace = false) =>
+  cartAction(async () => {
+    const r = await api("/api/swiggy/cart/add", { ...item, replace });
+    cart.data = r.cart;
+    cart.replaceWith = r.needsReplace ? { ...item, reason: r.reason } : null;
+    if (!r.needsReplace) toast(`Added ${item.dish ?? "dish"} to your Swiggy cart`);
+  }, { scroll: !cart.menuOpen });
+
+const setQty = (menuItemId, quantity) =>
+  cartAction(async () => {
+    cart.data = (await api("/api/swiggy/cart/qty", { menuItemId, quantity })).cart;
+  }, { scroll: false });
+
+async function toggleMenu() {
+  if (cart.menuOpen) { cart.menuOpen = false; return renderCart(); }
+  cart.menuOpen = true;
+  const id = cart.data?.restaurantId;
+  if (!id) return renderCart();
+  if (cart.menu?.restaurant.id === id) return renderCart();
+  cart.menuLoading = true;
+  renderCart();
+  try {
+    cart.menu = await api(`/api/swiggy/menu/${encodeURIComponent(id)}`);
+  } catch (err) {
+    cart.error = `Couldn't load the menu: ${err.message}`;
+    cart.menuOpen = false;
+  }
+  cart.menuLoading = false;
+  renderCart();
 }
 
 async function placeOrder() {
@@ -283,6 +315,7 @@ async function placeOrder() {
     } else {
       cart.result = r;
       cart.note = "";
+      cart.menuOpen = false;
     }
   } catch (err) {
     cart.error = err.message;
@@ -291,6 +324,29 @@ async function placeOrder() {
     cart.confirming = false;
     renderCart();
   }
+}
+
+function menuHtml(d, dis) {
+  if (cart.menuLoading) return `<div class="status"><span class="spin"></span><span>Loading menu…</span></div>`;
+  const m = cart.menu;
+  if (!m) return "";
+  const inCart = Object.fromEntries((d.items ?? []).map((i) => [i.menuItemId, i.quantity]));
+  const rows = m.categories
+    .map(
+      (c) => `<div class="cat">${esc(c.name)}</div>` +
+        c.items
+          .map((it) => {
+            const action = !it.inStock
+              ? `<span class="muted">Sold out</span>`
+              : it.needsChoice
+                ? `<span class="muted" title="This dish has sizes to choose. Add it in the Swiggy app.">Sizes · app</span>`
+                : `<button class="btn add" data-cart="addmenu" data-mid="${esc(it.menuItemId)}" data-dish="${esc(it.name)}" ${dis}>${inCart[it.menuItemId] ? `Add · ${inCart[it.menuItemId]} in cart` : "Add"}</button>`;
+            return `<div class="menu-item"><div class="name"><span class="veg ${it.veg ? "" : "non"}"></span>${esc(it.name)}${it.bestseller ? ` <span class="best-tag">★</span>` : ""}</div><span class="muted">${rs(it.price)}</span>${action}</div>`;
+          })
+          .join(""),
+    )
+    .join("");
+  return `<div class="menu">${m.restaurant.isOpen ? "" : `<div class="cart-err">This restaurant looks closed right now.</div>`}${rows || `<div class="muted">No dishes found.</div>`}</div>`;
 }
 
 function renderCart() {
@@ -310,25 +366,37 @@ function renderCart() {
          </div>`;
     html += `<div class="actions">${r.trackUrl ? `<a class="btn primary" href="${esc(r.trackUrl)}" target="_blank" rel="noopener">Track order</a>` : ""}<button class="btn" data-cart="dismiss">Done</button></div>`;
   } else if (d?.items?.length) {
-    const editable = d.restaurantId && d.items.length === 1 && !d.items[0].options.length;
     const p = d.pricing;
-    html = `<h2><span class="plat swiggy">Swiggy</span> Your cart${d.restaurantName ? ` · ${esc(d.restaurantName)}` : ""}</h2>`;
+    const count = d.items.reduce((n, i) => n + i.quantity, 0);
+    html = `<h2><span class="plat swiggy">Swiggy</span> Your cart${d.restaurantName ? ` · ${esc(d.restaurantName)}` : ""} <span class="muted">(${count} item${count === 1 ? "" : "s"})</span></h2>`;
     if (cart.replaceWith) {
-      html += `<div class="final">Your Swiggy cart already has ${d.items.map((i) => `<b>${esc(i.name)}</b>`).join(", ")}. Ordering <b>${esc(cart.replaceWith.dish)}</b> will remove ${d.items.length > 1 ? "them" : "it"}.
-        <div class="actions" style="margin-top:8px"><button class="btn primary" data-cart="replace" ${dis}>Replace cart</button><button class="btn" data-cart="keep" ${dis}>Keep current cart</button></div></div>`;
+      const w = cart.replaceWith;
+      const has = d.items.map((i) => `<b>${esc(i.name)}</b>`).join(", ");
+      const why = w.reason === "otherRestaurant"
+        ? `A Swiggy cart holds dishes from <b>one restaurant</b>. Your cart has ${has}${d.restaurantName ? ` from ${esc(d.restaurantName)}` : ""}. Adding <b>${esc(w.dish)}</b> from <b>${esc(w.restaurantName)}</b> starts a new cart and removes ${d.items.length > 1 ? "them" : "it"}.`
+        : `Your Swiggy cart already has ${has} (added in the Swiggy app). Adding <b>${esc(w.dish)}</b> here will replace ${d.items.length > 1 ? "them" : "it"}.`;
+      html += `<div class="final">${why}
+        <div class="actions" style="margin-top:8px"><button class="btn primary" data-cart="replace" ${dis}>Start new cart</button><button class="btn" data-cart="keep" ${dis}>Keep current cart</button></div></div>`;
     }
+    const editable = !!d.restaurantId;
     html += d.items
       .map(
         (i) => `<div class="cart-item">
           ${i.imageUrl ? `<img src="${esc(i.imageUrl)}" alt="" referrerpolicy="no-referrer" />` : `<span class="noimg"></span>`}
           <div><div class="name"><span class="veg ${i.veg ? "" : "non"}"></span>${esc(i.name)}</div>
             <div class="opts">${i.options.length ? esc(i.options.join(", ")) + " · " : ""}${rs(i.total)}${i.inStock ? "" : " · out of stock"}</div></div>
-          ${editable
-            ? `<div class="stepper"><button data-cart="dec" ${dis} aria-label="One less">−</button><span>${i.quantity}</span><button data-cart="inc" ${dis} aria-label="One more">+</button></div>`
+          ${editable && !i.options.length
+            ? `<div class="stepper"><button data-cart="dec" data-mid="${esc(i.menuItemId)}" data-q="${i.quantity}" ${dis} aria-label="One less">${i.quantity === 1 ? "🗑" : "−"}</button><span>${i.quantity}</span><button data-cart="inc" data-mid="${esc(i.menuItemId)}" data-q="${i.quantity}" ${dis} aria-label="One more">+</button></div>`
             : `<span class="muted">× ${i.quantity}</span>`}
         </div>`,
       )
       .join("");
+    if (editable) {
+      html += `<button class="btn more" data-cart="menu" ${dis}>${cart.menuOpen ? "Hide menu" : `+ Add more from ${esc(d.restaurantName ?? "this restaurant")}`}</button>`;
+      if (cart.menuOpen) html += menuHtml(d, dis);
+    } else {
+      html += `<div class="muted" style="font-size:12px">This cart was set up in the Swiggy app, so change its items there, or empty it to start one here.</div>`;
+    }
     if (p) {
       html += `<div class="bill">
         <div class="row"><span>Item total</span><span>${rs(p.itemTotal)}</span></div>
@@ -345,15 +413,18 @@ function renderCart() {
     if (!p) {
       html += `<div class="muted">Swiggy didn't return a bill for this cart.</div>`;
     } else if (cart.confirming) {
-      html += `<div class="final">Place a <b>real Swiggy order</b> for <b>${rs(p.toPay)}</b>, Pay on delivery${d.deliverTo ? `, delivered to <b>${esc(d.deliverTo.replace(/^.*? to /, ""))}</b>` : ""}?
+      html += `<div class="final">Place a <b>real Swiggy order</b> for <b>${count} item${count === 1 ? "" : "s"}</b>, <b>${rs(p.toPay)}</b>, Pay on delivery${d.deliverTo ? `, delivered to <b>${esc(d.deliverTo.replace(/^.*? to /, ""))}</b>` : ""}?
         <div class="actions" style="margin-top:8px"><button class="btn primary" data-cart="yes" ${dis}>${cart.busy ? "Placing…" : "Yes, place order"}</button><button class="btn" data-cart="back" ${dis}>Back</button></div></div>`;
     } else if (!cart.replaceWith) {
       html += `<div class="actions"><button class="btn primary" data-cart="place" ${dis}>Place order · ${rs(p.toPay)}</button></div>`;
     }
     html += `<button class="linkbtn" data-cart="clear" ${dis}>Empty cart</button>`;
-    if (cart.busy && !cart.confirming) html += `<div class="status"><span class="spin"></span><span>Talking to Swiggy…</span></div>`;
-  } else if (cart.error || cart.busy) {
-    html = cart.busy ? `<div class="status"><span class="spin"></span><span>Talking to Swiggy…</span></div>` : `<div class="cart-err">${esc(cart.error)}</div>`;
+    if (cart.busy && !cart.confirming) html += `<div class="status"><span class="spin"></span><span>Updating your Swiggy cart…</span></div>`;
+  } else if (state.status?.platforms?.swiggy?.status === "connected" || cart.error || cart.busy) {
+    html = `<h2><span class="plat swiggy">Swiggy</span> Your cart</h2>`;
+    if (cart.busy) html += `<div class="status"><span class="spin"></span><span>Talking to Swiggy…</span></div>`;
+    else if (cart.error) html += `<div class="cart-err">${esc(cart.error)}</div>`;
+    else html += `<div class="muted">Your cart is empty. Search a dish, then tap <b>Order on Swiggy</b> on any live Swiggy result.</div>`;
   }
 
   el.hidden = !html;
@@ -363,9 +434,7 @@ function renderCart() {
 $("#results").addEventListener("click", (e) => {
   const b = e.target.closest("[data-order]");
   if (!b || cart.busy) return;
-  const item = { restaurantId: b.dataset.rid, restaurantName: b.dataset.rname, menuItemId: b.dataset.mid, dish: b.dataset.dish };
-  const same = cart.data?.items?.length === 1 && cart.data.items[0].menuItemId === item.menuItemId;
-  setCartItem(item, same ? Math.min(10, cart.data.items[0].quantity + 1) : 1);
+  addToCart({ restaurantId: b.dataset.rid, restaurantName: b.dataset.rname, menuItemId: b.dataset.mid, dish: b.dataset.dish });
 });
 
 $("#cart").addEventListener("input", (e) => {
@@ -373,30 +442,26 @@ $("#cart").addEventListener("input", (e) => {
 });
 
 $("#cart").addEventListener("click", async (e) => {
-  const a = e.target.closest("[data-cart]")?.dataset.cart;
+  const btn = e.target.closest("[data-cart]");
+  const a = btn?.dataset.cart;
   if (!a || cart.busy) return;
   const d = cart.data;
-  const current = d?.items?.[0] && { restaurantId: d.restaurantId, restaurantName: d.restaurantName, menuItemId: d.items[0].menuItemId, dish: d.items[0].name };
-  if (a === "replace") return setCartItem(cart.replaceWith, 1, true);
+  if (a === "replace") return addToCart(cart.replaceWith, true);
   if (a === "keep") { cart.replaceWith = null; return renderCart(); }
-  if (a === "inc") return setCartItem(current, Math.min(10, d.items[0].quantity + 1));
-  if (a === "dec") return setCartItem(current, d.items[0].quantity - 1);
+  if (a === "inc") return setQty(btn.dataset.mid, Math.min(10, +btn.dataset.q + 1));
+  if (a === "dec") return setQty(btn.dataset.mid, +btn.dataset.q - 1);
+  if (a === "menu") return toggleMenu();
+  if (a === "addmenu") return addToCart({ restaurantId: d.restaurantId, restaurantName: d.restaurantName, menuItemId: btn.dataset.mid, dish: btn.dataset.dish });
   if (a === "place") { cart.confirming = true; cart.error = null; return renderCart(); }
   if (a === "back") { cart.confirming = false; return renderCart(); }
   if (a === "yes") return placeOrder();
   if (a === "dismiss") { cart.result = null; return loadCart(); }
   if (a === "clear") {
-    cart.busy = true;
-    renderCart();
-    try {
+    return cartAction(async () => {
       cart.data = (await api("/api/swiggy/cart/clear", {})).cart;
       cart.replaceWith = null;
-      cart.error = null;
-    } catch (err) {
-      cart.error = `Couldn't empty the cart: ${err.message}`;
-    }
-    cart.busy = false;
-    renderCart();
+      cart.menuOpen = false;
+    }, { scroll: false });
   }
 });
 

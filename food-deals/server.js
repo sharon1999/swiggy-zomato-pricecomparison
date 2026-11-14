@@ -58,7 +58,9 @@ const needSwiggy = () => {
   if (!live.swiggy.connected) throw new Error("Swiggy is not connected");
 };
 app.get("/api/swiggy/cart", wrap(() => (needSwiggy(), swiggyOrder.cart())));
-app.post("/api/swiggy/cart", wrap((req) => (needSwiggy(), swiggyOrder.setItem(req.body ?? {}))));
+app.post("/api/swiggy/cart/add", wrap((req) => (needSwiggy(), swiggyOrder.addItem(req.body ?? {}))));
+app.post("/api/swiggy/cart/qty", wrap((req) => (needSwiggy(), swiggyOrder.setQuantity(req.body ?? {}))));
+app.get("/api/swiggy/menu/:restaurantId", wrap((req) => (needSwiggy(), swiggyOrder.menu(req.params.restaurantId))));
 app.post("/api/swiggy/cart/clear", wrap(() => (needSwiggy(), swiggyOrder.clear())));
 app.post("/api/swiggy/order", wrap((req) => (needSwiggy(), swiggyOrder.place(req.body ?? {}))));
 

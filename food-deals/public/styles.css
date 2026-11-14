@@ -229,3 +229,13 @@ h2 { font-size: 16px; margin: 0; }
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
   padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 10; max-width: calc(100% - 32px);
 }
+
+/* add more from the same restaurant */
+.btn.more { padding: 8px 12px; font-size: 13px; border-style: dashed; }
+.menu { max-height: 340px; overflow-y: auto; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--bg); }
+.menu .cat { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 8px 0 2px; }
+.menu-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 4px 0; font-size: 13px; }
+.menu-item .name { display: flex; gap: 6px; }
+.menu-item .muted { font-size: 12px; margin: 0; }
+.btn.add { padding: 4px 10px; font-size: 12px; border-color: var(--swiggy); color: var(--swiggy); background: var(--panel); }
+.best-tag { color: var(--swiggy); font-size: 11px; }
