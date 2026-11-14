@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/* Colour tokens (same as the old styles.css). They switch for dark mode on
+   their own, so components never need dark: variants. */
+:root {
+  --bg: #f7f5f2;
+  --panel: #ffffff;
+  --ink: #1d1b19;
+  --muted: #6f6a64;
+  --line: #e8e3dc;
+  --accent: #1f8a5b;
+  --accent-ink: #ffffff;
+  --accent-soft: #e4f4ec;
+  --swiggy: #f26b1d;
+  --swiggy-soft: #fdeee4;
+  --zomato: #d93a4c;
+  --zomato-soft: #fbe7e9;
+  --warn: #9a6b00;
+  --warn-soft: #fff5d6;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141311;
+    --panel: #1d1c1a;
+    --ink: #f1eee9;
+    --muted: #a39d95;
+    --line: #2f2d2a;
+    --accent: #3cc488;
+    --accent-ink: #0b1f15;
+    --accent-soft: #163327;
+    --swiggy: #ff8a47;
+    --swiggy-soft: #3a2518;
+    --zomato: #ff6b7c;
+    --zomato-soft: #3a1c21;
+    --warn: #f0c35a;
+    --warn-soft: #362b10;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-swiggy: var(--swiggy);
+  --color-swiggy-soft: var(--swiggy-soft);
+  --color-zomato: var(--zomato);
+  --color-zomato-soft: var(--zomato-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --shadow-card: var(--shadow);
+  --font-sans: Inter, system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+}

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import fs from "node:fs";
 import express from "express";
 import { createCatalog } from "./engine/catalog.js";
 import { McpPlatform, MCP_SERVERS } from "./providers/mcp.js";
@@ -17,7 +18,12 @@ const swiggyOrder = createSwiggyOrder(live.swiggy, createSwiggyLive(live.swiggy)
 
 const app = express();
 app.use(express.json());
-app.use(express.static("public"));
+// The React UI, built by `npm run build` into dist/. Falls back to the old
+// plain-JS page in public/ until it's built.
+const UI_DIR = fs.existsSync("dist/index.html") ? "dist" : "public";
+app.use(express.static(UI_DIR));
+// Where to send the browser after sign-in (the Vite dev server in `npm run dev`).
+const APP_URL = process.env.APP_URL ?? "";
 
 const wrap = (fn) => async (req, res) => {
   try {
@@ -81,7 +87,7 @@ app.post("/api/disconnect/:platform", wrap(async (req) => {
 app.get("/callback", async (req, res) => {
   const { code, state, error } = req.query;
   const conn = live[String(state ?? "").split(".")[0]];
-  const back = (msg) => res.redirect(`/?auth=${encodeURIComponent(msg)}`);
+  const back = (msg) => res.redirect(`${APP_URL}/?auth=${encodeURIComponent(msg)}`);
   if (error) return back(`Sign-in cancelled: ${error}`);
   if (!conn || !code) return back("Sign-in failed: missing code");
   if (!conn.auth.checkState(String(state))) return back("Sign-in failed: security check (state) did not match, try again");
@@ -124,6 +130,6 @@ await Promise.all(
   }),
 );
 app.listen(PORT, () => {
-  console.log(`Food Deals running at http://localhost:${PORT}`);
+  console.log(`Food Deals running at http://localhost:${PORT} (UI from ${UI_DIR}/)`);
   console.log(`AI deal finder: ${aiAvailable() ? "on" : "off (set ANTHROPIC_API_KEY in .env)"}`);
 });

@@ -7,8 +7,11 @@ Stop scrolling Swiggy and Zomato. Search a dish or just ask, for example "lowest
 ```bash
 npm install
 cp .env.example .env      # then paste your ANTHROPIC_API_KEY
+npm run build             # build the React UI into dist/
 npm start                 # http://localhost:3000
 ```
+
+While working on the UI, run `npm run dev` instead and open http://localhost:5173. It starts the API on :3000 and the Vite dev server with hot reload, and sends you back to :5173 after signing in to Swiggy or Zomato.
 
 ## What it does
 
@@ -44,8 +47,12 @@ engine/matcher.js    same dish across platforms
 engine/catalog.js    search / compare / top offers (live or demo)
 providers/demo.js    daily demo data
 providers/mcp.js     Swiggy / Zomato MCP connection + OAuth
+providers/swiggyOrder.js  Swiggy cart, menu and Pay-on-delivery ordering
 ai/dealFinder.js     Claude tool loop with order confirmation
 ai/normalize.js      turns live results into the common format
-public/              the web page
+web/                 React + Tailwind UI (Vite); `npm run build` → dist/
+  src/cart.js        Swiggy cart state and actions (React hook)
+  src/components/    Header, SearchPanel, Cards, CartPanel, Chat, …
+public/              old plain-JS page, served only if dist/ isn't built
 test/                npm test
 ```
