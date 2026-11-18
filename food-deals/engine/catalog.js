@@ -84,13 +84,10 @@ export function createCatalog({ live }) {
    * dishes on both apps, merges them and ranks by price per item.
    */
   const homeCache = new Map(); // address key -> { at, items, sources, warnings }
-  async function home({ veg, maxPrice, minRating, maxEta, category, limit = 30 } = {}) {
-    const anyConnected = PLATFORMS.some((p) => live[p]?.connected);
-    if (!anyConnected) {
-      const r = await search({ veg, maxPrice, minRating, maxEta, limit });
-      return { ...r, categories: [] };
-    }
+  const anyConnected = () => PLATFORMS.some((p) => live[p]?.connected);
 
+  /** The popular-dishes pool behind the home screen (cached 10 min per address). */
+  async function homeBase() {
     const key = PLATFORMS.map((p) => (live[p]?.connected ? live[p].auth._get().addressId ?? "?" : "-")).join("|");
     let base = homeCache.get(key);
     if (!base || Date.now() - base.at > 10 * 60_000) {
@@ -108,6 +105,26 @@ export function createCatalog({ live }) {
       base = { at: Date.now(), items: [...byId.values()], sources, warnings };
       homeCache.set(key, base);
     }
+    return base;
+  }
+
+  /**
+   * What the Compare / Top offers tabs work on: the search results for a typed
+   * dish, or with nothing typed (and a platform connected) the home-screen pool.
+   */
+  async function pool(opts) {
+    if (opts.q?.trim() || !anyConnected()) return search({ ...opts, platform: undefined, limit: 1000 });
+    const base = await homeBase();
+    const items = applyFilters(base.items, opts).sort(SORTERS.price);
+    return { items, sources: base.sources, warnings: base.warnings };
+  }
+
+  async function home({ veg, maxPrice, minRating, maxEta, category, limit = 30 } = {}) {
+    if (!anyConnected()) {
+      const r = await search({ veg, maxPrice, minRating, maxEta, limit });
+      return { ...r, categories: [] };
+    }
+    const base = await homeBase();
 
     // Real dishes only: no add-ons ("extra chutney") or tiny side items.
     let items = base.items.filter((i) => i.pricing.perUnit >= HOME_MIN_PRICE && !NOT_A_DISH.test(i.dish));
@@ -134,7 +151,7 @@ export function createCatalog({ live }) {
 
   /** Same dish, side by side: which app is cheaper and by how much. */
   async function compare(opts = {}) {
-    const { items, sources, warnings } = await search({ ...opts, platform: undefined, limit: 500 });
+    const { items, sources, warnings } = await pool(opts);
     // Dishes listed on both apps first (that's the actual comparison), cheapest first.
     const onBoth = (r) => (Object.keys(r.byPlatform).length > 1 ? 0 : 1);
     const rows = groupAcrossPlatforms(items).sort((a, b) => onBoth(a) - onBoth(b) || a.cheapestTotal - b.cheapestTotal);
@@ -142,8 +159,8 @@ export function createCatalog({ live }) {
   }
 
   /** Restaurants ranked by how strong today's offer is. */
-  async function topOffers({ q = "", limit = 15 } = {}) {
-    const { items, sources, warnings } = await search({ q, limit: 1000 });
+  async function topOffers({ limit = 15, ...opts } = {}) {
+    const { items, sources, warnings } = await pool(opts);
     const byRest = new Map();
     for (const i of items) {
       if (!i.offer) continue;

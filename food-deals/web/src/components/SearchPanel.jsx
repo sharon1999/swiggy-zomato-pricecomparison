@@ -27,7 +27,7 @@ export function SearchPanel({ refreshKey, addresses }) {
   const [minRating, setMinRating] = useState("");
   const [maxEta, setMaxEta] = useState("");
   const [category, setCategory] = useState("");
-  const [res, setRes] = useState({ loading: true });
+  const [res, setRes] = useState({ loading: true, tab: "cheapest" });
   const reqId = useRef(0);
 
   // Re-run on submit, tab, filter, connection or address change (not on every keystroke).
@@ -50,10 +50,10 @@ export function SearchPanel({ refreshKey, addresses }) {
         : tab === "compare"
           ? "/api/compare"
           : "/api/top-offers";
-    setRes((r) => ({ ...r, loading: true, home: isHome }));
+    setRes((r) => ({ ...r, loading: true, home: isHome, tab }));
     api(`${url}?${p}`)
-      .then((data) => id === reqId.current && setRes({ loading: false, data, query, home: isHome }))
-      .catch((err) => id === reqId.current && setRes({ loading: false, error: err.message, home: isHome }));
+      .then((data) => id === reqId.current && setRes({ loading: false, data, query, home: isHome, tab }))
+      .catch((err) => id === reqId.current && setRes({ loading: false, error: err.message, home: isHome, tab }));
   }, [tab, veg, maxPrice, minRating, maxEta, category, refreshKey, submits]);
 
   const commitMax = () => setMaxPrice(maxDraft.trim());
@@ -66,8 +66,11 @@ export function SearchPanel({ refreshKey, addresses }) {
   const notices = [...(d?.warnings ?? [])];
   if (demo.length && !anyLive) notices.push(`${demo.join(" & ")} showing demo data. Connect at the top for real prices.`);
 
+  // Right after a tab click React renders once with the old tab's data
+  // (different shape) before the effect starts the new request: treat as loading.
+  const loading = res.loading || res.tab !== tab;
   let body;
-  if (res.loading) {
+  if (loading) {
     body = (
       <div className="col-span-full flex items-center justify-center gap-2 py-8 text-muted">
         <Spinner />
@@ -77,15 +80,15 @@ export function SearchPanel({ refreshKey, addresses }) {
   } else if (res.error) {
     body = <Empty>Couldn't load results: {res.error}</Empty>;
   } else if (tab === "cheapest") {
-    body = d.items.length ? (
+    body = d?.items?.length ? (
       d.items.map((i, k) => <ItemCard key={i.id} i={i} best={k === 0} />)
     ) : (
       <Empty>{res.query || res.home ? "Nothing matches. Try fewer filters." : "Search a dish above, or tap a question on the right, to compare live prices."}</Empty>
     );
   } else if (tab === "compare") {
-    body = d.rows.length ? d.rows.map((r) => <CompareCard key={`${r.restaurant}:${r.dish}`} row={r} />) : <Empty>Nothing to compare.</Empty>;
+    body = d?.rows?.length ? d.rows.map((r) => <CompareCard key={`${r.restaurant}:${r.dish}`} row={r} />) : <Empty>Nothing to compare.</Empty>;
   } else {
-    body = d.offers.length ? (
+    body = d?.offers?.length ? (
       d.offers.map((o, k) => <OfferCard key={`${o.platform}:${o.restaurant}`} o={o} first={k === 0} />)
     ) : (
       <Empty>No offers found.</Empty>
@@ -178,9 +181,9 @@ export function SearchPanel({ refreshKey, addresses }) {
       </nav>
 
       {res.home && tab === "cheapest" && (
-        <HomeHeader data={!res.loading && d?.home ? d : null} category={category} setCategory={setCategory} />
+        <HomeHeader data={!loading && d?.home ? d : null} category={category} setCategory={setCategory} />
       )}
-      {!res.loading && notices.length > 0 && (
+      {!loading && notices.length > 0 && (
         <div className="mb-3 rounded-[10px] bg-warn-soft px-3 py-2 text-[13px] text-warn">{notices.join(" ")}</div>
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">{body}</div>
