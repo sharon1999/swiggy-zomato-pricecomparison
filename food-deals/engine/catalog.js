@@ -73,21 +73,63 @@ export function createCatalog({ live }) {
         }
       });
     }
-    let items = priceAll(results.flatMap((r) => r.listings));
-    if (veg === true || veg === "true") items = items.filter((i) => i.veg);
-    if (veg === "nonveg") items = items.filter((i) => !i.veg);
-    if (maxPrice) items = items.filter((i) => i.pricing.total <= +maxPrice);
-    if (minRating) items = items.filter((i) => (i.rating ?? 0) >= +minRating);
-    if (maxEta) items = items.filter((i) => (i.etaMins ?? 99) <= +maxEta);
-
-    const sorters = {
-      price: (a, b) => a.pricing.perUnit - b.pricing.perUnit,
-      offer: (a, b) => b.pricing.valueSavingsPct - a.pricing.valueSavingsPct || b.pricing.savings - a.pricing.savings,
-      rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0),
-      eta: (a, b) => (a.etaMins ?? 99) - (b.etaMins ?? 99),
-    };
-    items.sort(sorters[sort] ?? sorters.price);
+    const items = applyFilters(priceAll(results.flatMap((r) => r.listings)), { veg, maxPrice, minRating, maxEta });
+    items.sort(SORTERS[sort] ?? SORTERS.price);
     return { items: items.slice(0, +limit), total: items.length, sources, warnings };
+  }
+
+  /**
+   * Home screen: the cheapest dishes near you without typing anything.
+   * Live platforms only search by keyword, so this runs a set of popular
+   * dishes on both apps, merges them and ranks by price per item.
+   */
+  const homeCache = new Map(); // address key -> { at, items, sources, warnings }
+  async function home({ veg, maxPrice, minRating, maxEta, category, limit = 30 } = {}) {
+    const anyConnected = PLATFORMS.some((p) => live[p]?.connected);
+    if (!anyConnected) {
+      const r = await search({ veg, maxPrice, minRating, maxEta, limit });
+      return { ...r, categories: [] };
+    }
+
+    const key = PLATFORMS.map((p) => (live[p]?.connected ? live[p].auth._get().addressId ?? "?" : "-")).join("|");
+    let base = homeCache.get(key);
+    if (!base || Date.now() - base.at > 10 * 60_000) {
+      const results = [];
+      // A few searches at a time, to go easy on the Swiggy/Zomato servers.
+      for (let i = 0; i < HOME_QUERIES.length; i += 3) {
+        const batch = HOME_QUERIES.slice(i, i + 3);
+        results.push(...(await Promise.all(batch.map((q) => search({ q, limit: 1000 }).then((r) => ({ q, r }))))));
+      }
+      const byId = new Map();
+      for (const { q, r } of results) for (const it of r.items) if (!byId.has(it.id)) byId.set(it.id, { ...it, category: q });
+      const sources = {};
+      for (const { r } of results) for (const [p, m] of Object.entries(r.sources)) if (sources[p] !== "live") sources[p] = m;
+      const warnings = [...new Set(results.flatMap(({ r }) => r.warnings).filter((w) => !w.startsWith("Type a dish")))];
+      base = { at: Date.now(), items: [...byId.values()], sources, warnings };
+      homeCache.set(key, base);
+    }
+
+    // Real dishes only: no add-ons ("extra chutney") or tiny side items.
+    let items = base.items.filter((i) => i.pricing.perUnit >= HOME_MIN_PRICE && !NOT_A_DISH.test(i.dish));
+    items = applyFilters(items, { veg, maxPrice, minRating, maxEta });
+    const counts = {};
+    for (const i of items) counts[i.category] = (counts[i.category] ?? 0) + 1;
+    const categories = HOME_QUERIES.filter((q) => counts[q]).map((q) => ({ name: q, count: counts[q] }));
+    if (category) items = items.filter((i) => i.category === category);
+
+    items.sort(SORTERS.price);
+    // At most 2 dishes per restaurant, so one cheap shop doesn't fill the page.
+    const perRest = new Map();
+    const picked = [];
+    for (const i of items) {
+      const k = `${i.platform}:${i.restaurant}`;
+      const n = perRest.get(k) ?? 0;
+      if (n >= 2) continue;
+      perRest.set(k, n + 1);
+      picked.push(i);
+      if (picked.length >= +limit) break;
+    }
+    return { items: picked, total: items.length, categories, sources: base.sources, warnings: base.warnings, home: true };
   }
 
   /** Same dish, side by side: which app is cheaper and by how much. */
@@ -129,5 +171,28 @@ export function createCatalog({ live }) {
     cache.clear();
   }
 
-  return { search, compare, topOffers, addresses, setAddress };
+  return { search, home, compare, topOffers, addresses, setAddress };
+}
+
+// Popular dishes searched for the home screen (cheapest food without typing).
+export const HOME_QUERIES = ["biryani", "dosa", "burger", "pizza", "fried rice", "shawarma", "parotta", "meals"];
+const HOME_MIN_PRICE = 30;
+const NOT_A_DISH =
+  /\b(extra|add[\s-]?on|addon|raita|chutney|gravy only|sauce|dip|mayo(nnaise)?|packing|packaging|water|bottle|curd|pickle|papad|cutlery|carry bag|pizza base|burger buns?)\b/i;
+
+const SORTERS = {
+  price: (a, b) => a.pricing.perUnit - b.pricing.perUnit,
+  offer: (a, b) => b.pricing.valueSavingsPct - a.pricing.valueSavingsPct || b.pricing.savings - a.pricing.savings,
+  rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0),
+  eta: (a, b) => (a.etaMins ?? 99) - (b.etaMins ?? 99),
+};
+
+function applyFilters(items, { veg, maxPrice, minRating, maxEta }) {
+  let out = items;
+  if (veg === true || veg === "true") out = out.filter((i) => i.veg);
+  if (veg === "nonveg") out = out.filter((i) => !i.veg);
+  if (maxPrice) out = out.filter((i) => i.pricing.total <= +maxPrice);
+  if (minRating) out = out.filter((i) => (i.rating ?? 0) >= +minRating);
+  if (maxEta) out = out.filter((i) => (i.etaMins ?? 99) <= +maxEta);
+  return out;
 }

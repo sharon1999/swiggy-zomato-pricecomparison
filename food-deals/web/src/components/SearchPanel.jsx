@@ -26,10 +26,12 @@ export function SearchPanel({ refreshKey, addresses }) {
   const [maxDraft, setMaxDraft] = useState("");
   const [minRating, setMinRating] = useState("");
   const [maxEta, setMaxEta] = useState("");
+  const [category, setCategory] = useState("");
   const [res, setRes] = useState({ loading: true });
   const reqId = useRef(0);
 
   // Re-run on submit, tab, filter, connection or address change (not on every keystroke).
+  // Cheapest tab with nothing typed = the home feed: cheapest dishes near you.
   useEffect(() => {
     const id = ++reqId.current;
     const p = new URLSearchParams();
@@ -39,12 +41,20 @@ export function SearchPanel({ refreshKey, addresses }) {
     if (maxPrice) p.set("maxPrice", maxPrice);
     if (minRating) p.set("minRating", minRating);
     if (maxEta) p.set("maxEta", maxEta);
-    const url = tab === "cheapest" ? (p.set("sort", "price"), "/api/search") : tab === "compare" ? "/api/compare" : "/api/top-offers";
-    setRes((r) => ({ ...r, loading: true }));
+    const isHome = tab === "cheapest" && !query;
+    if (isHome && category) p.set("category", category);
+    const url = isHome
+      ? "/api/home"
+      : tab === "cheapest"
+        ? (p.set("sort", "price"), "/api/search")
+        : tab === "compare"
+          ? "/api/compare"
+          : "/api/top-offers";
+    setRes((r) => ({ ...r, loading: true, home: isHome }));
     api(`${url}?${p}`)
-      .then((data) => id === reqId.current && setRes({ loading: false, data, query }))
-      .catch((err) => id === reqId.current && setRes({ loading: false, error: err.message }));
-  }, [tab, veg, maxPrice, minRating, maxEta, refreshKey, submits]);
+      .then((data) => id === reqId.current && setRes({ loading: false, data, query, home: isHome }))
+      .catch((err) => id === reqId.current && setRes({ loading: false, error: err.message, home: isHome }));
+  }, [tab, veg, maxPrice, minRating, maxEta, category, refreshKey, submits]);
 
   const commitMax = () => setMaxPrice(maxDraft.trim());
   const d = res.data;
@@ -59,8 +69,9 @@ export function SearchPanel({ refreshKey, addresses }) {
   let body;
   if (res.loading) {
     body = (
-      <div className="col-span-full py-8 text-center">
+      <div className="col-span-full flex items-center justify-center gap-2 py-8 text-muted">
         <Spinner />
+        {res.home && <span className="text-[13px]">Finding the cheapest food near you on Swiggy & Zomato…</span>}
       </div>
     );
   } else if (res.error) {
@@ -69,7 +80,7 @@ export function SearchPanel({ refreshKey, addresses }) {
     body = d.items.length ? (
       d.items.map((i, k) => <ItemCard key={i.id} i={i} best={k === 0} />)
     ) : (
-      <Empty>{res.query ? "Nothing matches. Try fewer filters." : "Search a dish above, or tap a question on the right, to compare live prices."}</Empty>
+      <Empty>{res.query || res.home ? "Nothing matches. Try fewer filters." : "Search a dish above, or tap a question on the right, to compare live prices."}</Empty>
     );
   } else if (tab === "compare") {
     body = d.rows.length ? d.rows.map((r) => <CompareCard key={`${r.restaurant}:${r.dish}`} row={r} />) : <Empty>Nothing to compare.</Empty>;
@@ -166,11 +177,48 @@ export function SearchPanel({ refreshKey, addresses }) {
         ))}
       </nav>
 
+      {res.home && tab === "cheapest" && (
+        <HomeHeader data={!res.loading && d?.home ? d : null} category={category} setCategory={setCategory} />
+      )}
       {!res.loading && notices.length > 0 && (
         <div className="mb-3 rounded-[10px] bg-warn-soft px-3 py-2 text-[13px] text-warn">{notices.join(" ")}</div>
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">{body}</div>
     </section>
+  );
+}
+
+/** Title + category chips above the home feed. */
+function HomeHeader({ data, category, setCategory }) {
+  const live = Object.values(data?.sources ?? {}).includes("live");
+  const chips = data?.categories ?? [];
+  return (
+    <div className="mb-3 grid gap-2">
+      <div>
+        <h2 className="m-0 text-lg font-bold tracking-tight">Cheapest near you right now</h2>
+        <p className="m-0 text-[13px] text-muted">
+          {live
+            ? `Lowest prices across Swiggy & Zomato from ${data.total} dishes, cheapest first. Search above for something specific.`
+            : "Search above for something specific."}
+        </p>
+      </div>
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {[{ name: "", count: null }, ...chips].map((c) => (
+            <button
+              key={c.name || "all"}
+              className={cx(
+                "cursor-pointer rounded-full border px-3 py-1 text-[13px] capitalize",
+                category === c.name ? "border-ink bg-ink text-panel" : "border-line bg-panel text-ink hover:border-accent",
+              )}
+              onClick={() => setCategory(c.name)}
+            >
+              {c.name || "All"}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

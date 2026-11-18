@@ -43,6 +43,7 @@ app.get("/api/status", wrap(async () => ({
 })));
 
 app.get("/api/search", wrap((req) => catalog.search(req.query)));
+app.get("/api/home", wrap((req) => catalog.home(req.query)));
 app.get("/api/compare", wrap((req) => catalog.compare(req.query)));
 app.get("/api/top-offers", wrap((req) => catalog.topOffers(req.query)));
 

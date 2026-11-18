@@ -25,6 +25,9 @@ export function finalPrice(listing, qty = 1) {
     const total = round(itemTotal + fees);
     const estTotal = round(Math.max(0, itemTotal - (offer.type === "bogo" ? 0 : est)) + fees);
     const pct = itemTotal > 0 ? round((est / (itemTotal + (offer.type === "bogo" ? listing.price : 0))) * 100) : 0;
+    // A flat offer that would make the dish (nearly) free always needs a
+    // bigger order, so a "≈₹0" estimate would mislead.
+    const needsBiggerOrder = offer.type === "flat" && offer.amount >= itemTotal * 0.8;
     return {
       itemTotal: round(itemTotal),
       discount: 0,
@@ -34,14 +37,16 @@ export function finalPrice(listing, qty = 1) {
       units: qty,
       savings: 0,
       savingsPct: 0,
-      valueSavingsPct: pct,
-      estTotal,
-      estSavings: round(est),
+      valueSavingsPct: needsBiggerOrder ? 0 : pct,
+      estTotal: needsBiggerOrder ? null : estTotal,
+      estSavings: needsBiggerOrder ? 0 : round(est),
       offerApplied: null,
       offerNote:
         offer.type === "other"
           ? offer.label
-          : `${offer.label} · ≈₹${estTotal}${offer.type === "bogo" ? " for 2" : ""} if eligible`,
+          : needsBiggerOrder
+            ? `${offer.label} on a bigger order`
+            : `${offer.label} · ≈₹${estTotal}${offer.type === "bogo" ? " for 2" : ""} if eligible`,
     };
   }
 

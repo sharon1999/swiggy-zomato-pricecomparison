@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { rs } from "../api.js";
 import { useCart } from "../cart.js";
 import { Button, Meta, Plat, SourceTag, VegDot, card, cx } from "./ui.jsx";
@@ -21,7 +22,23 @@ function Offer({ text, locked }) {
   );
 }
 
-const canOrder = (i) => i.platform === "swiggy" && i.source === "live" && i.restaurantId && i.menuItemId;
+/** Same-size image slot on every card; a plain placeholder when there's no photo or it fails to load. */
+function DishImage({ src, dish }) {
+  const [failed, setFailed] = useState(false);
+  const box = "h-[110px] w-full shrink-0 rounded-[10px] bg-bg";
+  if (!src || failed) {
+    return (
+      <div className={cx(box, "flex items-center justify-center text-3xl font-extrabold uppercase text-muted/40")} aria-hidden>
+        {dish?.trim()?.[0] ?? "🍽"}
+      </div>
+    );
+  }
+  return (
+    <img className={cx(box, "object-cover")} src={src} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+  );
+}
+
+const canOrder =(i) => i.platform === "swiggy" && i.source === "live" && i.restaurantId && i.menuItemId;
 
 export function ItemCard({ i, best = false, mini = false }) {
   const cart = useCart();
@@ -39,9 +56,7 @@ export function ItemCard({ i, best = false, mini = false }) {
   return (
     <div className={cx(card, best && "border-accent", mini && "gap-1 p-2.5")}>
       {best && <Badge>Best pick</Badge>}
-      {i.imageUrl && !mini && (
-        <img className="h-[110px] w-full rounded-[10px] bg-bg object-cover" src={i.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
-      )}
+      {!mini && <DishImage src={i.imageUrl} dish={i.dish} />}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-start gap-1.5 text-[15px] font-bold">
           <VegDot veg={i.veg} />
@@ -77,6 +92,7 @@ export function ItemCard({ i, best = false, mini = false }) {
         <Button
           variant="swiggy"
           size="sm"
+          className="mt-auto"
           disabled={cart.busy}
           onClick={() => cart.add({ restaurantId: i.restaurantId, restaurantName: i.restaurant, menuItemId: i.menuItemId, dish: i.dish })}
         >
@@ -90,14 +106,14 @@ export function ItemCard({ i, best = false, mini = false }) {
 function Side({ i, win }) {
   if (!i) {
     return (
-      <div className="border-l border-line px-3.5 py-3 max-sm:[&:nth-child(2)]:border-l-0">
+      <div className="border-l border-line px-3.5 py-3 max-sm:nth-2:border-l-0">
         <span className="text-[13px] text-muted">Not listed</span>
       </div>
     );
   }
   const p = i.pricing;
   return (
-    <div className={cx("border-l border-line px-3.5 py-3 max-sm:[&:nth-child(2)]:border-l-0", win && "bg-accent-soft")}>
+    <div className={cx("border-l border-line px-3.5 py-3 max-sm:nth-2:border-l-0", win && "bg-accent-soft")}>
       <div className="flex items-center justify-between gap-2">
         <Plat p={i.platform} />
         {win && <span className="text-[13px] font-bold text-accent">Cheaper</span>}

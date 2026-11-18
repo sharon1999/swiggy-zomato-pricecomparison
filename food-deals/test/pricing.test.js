@@ -61,3 +61,12 @@ test("demo data groups into one row per dish with both platforms", () => {
   assert.equal(rows.length, all.length / 2);
   assert.ok(rows.every((r) => r.byPlatform.swiggy && r.byPlatform.zomato));
 });
+
+test("a flat offer bigger than the dish isn't shown as a near-free price", async () => {
+  const { finalPrice } = await import("../engine/pricing.js");
+  const { parseOffer } = await import("../providers/zomatoLive.js");
+  const p = finalPrice({ price: 30, offer: parseOffer("Flat ₹75 OFF") });
+  assert.equal(p.total, 30);
+  assert.equal(p.estTotal, null);
+  assert.equal(p.offerNote, "Flat ₹75 OFF on a bigger order");
+});
