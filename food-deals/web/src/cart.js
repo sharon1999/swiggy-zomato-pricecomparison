@@ -19,6 +19,7 @@ export function useSwiggyCart({ enabled, toast }) {
   const [menu, setMenu] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuLoading, setMenuLoading] = useState(false);
+  const [coupons, setCoupons] = useState(null); // { loading } | { coupons, applied, reason } | { error }
   const panelRef = useRef(null);
 
   // Re-read the cart. Leaves any error message alone so it stays visible.
@@ -45,6 +46,24 @@ export function useSwiggyCart({ enabled, toast }) {
     }
   }, [data?.restaurantId, menu]);
 
+  // Coupons depend on the restaurant and what's in the cart: re-read when either changes.
+  const cartKey = data?.items?.length
+    ? `${data.restaurantId ?? "app"}:${data.items.map((i) => `${i.menuItemId}x${i.quantity}`).join(",")}:${data.coupon ?? ""}`
+    : "";
+  useEffect(() => {
+    if (!enabled || !cartKey) return setCoupons(null);
+    let live = true;
+    setCoupons((c) => ({ ...c, loading: true }));
+    api("/api/swiggy/coupons")
+      .then((r) => live && setCoupons(r))
+      .catch((err) => live && setCoupons({ error: err.message }));
+    return () => {
+      live = false;
+    };
+  }, [enabled, cartKey]);
+
+  const couponNotice = (r) => r.couponDropped && toast(`Coupon ${r.couponDropped} no longer applies to this cart`);
+
   /** Run one cart change at a time; errors show in the panel. */
   async function run(fn, { scroll = true } = {}) {
     if (busyRef.current) return;
@@ -70,6 +89,7 @@ export function useSwiggyCart({ enabled, toast }) {
       async () => {
         const r = await api("/api/swiggy/cart/add", { ...item, replace });
         setData(r.cart);
+        couponNotice(r);
         setReplaceWith(r.needsReplace ? { ...item, reason: r.reason } : null);
         if (!r.needsReplace) toast(`Added ${item.dish ?? "dish"} to your Swiggy cart`);
       },
@@ -77,7 +97,27 @@ export function useSwiggyCart({ enabled, toast }) {
     );
 
   const setQty = (menuItemId, quantity) =>
-    run(async () => setData((await api("/api/swiggy/cart/qty", { menuItemId, quantity })).cart), { scroll: false });
+    run(
+      async () => {
+        const r = await api("/api/swiggy/cart/qty", { menuItemId, quantity });
+        setData(r.cart);
+        couponNotice(r);
+      },
+      { scroll: false },
+    );
+
+  const applyCoupon = (code) =>
+    run(
+      async () => {
+        const r = await api("/api/swiggy/coupon/apply", { code });
+        setData(r.cart);
+        toast(`Coupon ${code} applied: you save ${rs(r.cart.couponDiscount)}`);
+      },
+      { scroll: false },
+    );
+
+  const removeCoupon = () =>
+    run(async () => setData((await api("/api/swiggy/coupon/remove", {})).cart), { scroll: false });
 
   const clear = () =>
     run(
@@ -142,6 +182,9 @@ export function useSwiggyCart({ enabled, toast }) {
     menu,
     menuOpen,
     menuLoading,
+    coupons,
+    applyCoupon,
+    removeCoupon,
     panelRef,
     reload,
     add,

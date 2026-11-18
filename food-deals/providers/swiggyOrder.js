@@ -15,6 +15,11 @@
 const firstLine = (t) => String(t ?? "").split("\n").find((l) => l.trim())?.trim().slice(0, 300) ?? "";
 const MAX_QTY = 10;
 const MAX_LINES = 15;
+const couponCodeOf = (c) => {
+  if (!c) return null;
+  const code = typeof c === "string" ? c : c.code ?? c.coupon_code ?? c.couponCode ?? null;
+  return code ? String(code).trim() || null : null;
+};
 
 export function createSwiggyOrder(conn, swiggyLive) {
   let placing = false;
@@ -64,6 +69,8 @@ export function createSwiggyOrder(conn, swiggyLive) {
           }
         : null,
       couponDiscount: d.offers?.coupon_discount > 0 ? d.offers.coupon_discount : 0,
+      // Swiggy may name a "best" coupon here without applying it: only trust it with a discount.
+      coupon: d.offers?.coupon_discount > 0 ? couponCodeOf(d.offers.coupon_applied) : null,
       freeDelivery: !!d.offers?.free_delivery_applied,
     };
   }
@@ -80,7 +87,7 @@ export function createSwiggyOrder(conn, swiggyLive) {
   }
 
   /** Make the Swiggy cart exactly `lines` ([{ menuItemId, quantity }]) from one restaurant. */
-  async function write(restaurantId, restaurantName, lines, { hadItems, previous }) {
+  async function write(restaurantId, restaurantName, lines, { hadItems, previous, coupon }) {
     if (hadItems) await call("flush_food_cart", {});
     if (!lines.length) {
       conn.auth._set({ cart: {} });
@@ -105,6 +112,12 @@ export function createSwiggyOrder(conn, swiggyLive) {
     conn.auth._set({
       cart: { restaurantId, restaurantName: restaurantName ?? null, itemIds: lines.map((l) => l.menuItemId) },
     });
+    // Rebuilding the cart drops the coupon: put it back if it still applies.
+    if (coupon) {
+      const r = await conn.callTool("apply_food_coupon", { couponCode: coupon, addressId }).catch(() => ({ isError: true }));
+      if (r.isError) return { couponDropped: coupon };
+    }
+    return {};
   }
 
   // Cart writes run one at a time so two quick clicks can't interleave.
@@ -142,8 +155,12 @@ export function createSwiggyOrder(conn, swiggyLive) {
       lines.push({ menuItemId, quantity: 1 });
     }
     const name = sameRestaurant ? cur.restaurantName ?? restaurantName : restaurantName;
-    await write(restaurantId, name, lines, { hadItems: cur.items.length > 0, previous: sameRestaurant ? linesOf(cur) : null });
-    return { cart: await cart() };
+    const w = await write(restaurantId, name, lines, {
+      hadItems: cur.items.length > 0,
+      previous: sameRestaurant ? linesOf(cur) : null,
+      coupon: sameRestaurant ? cur.coupon : null,
+    });
+    return { ...w, cart: await cart() };
   });
 
   /** Change the quantity of a dish already in an app-built cart (0 removes it). */
@@ -157,13 +174,69 @@ export function createSwiggyOrder(conn, swiggyLive) {
     if (!line) throw new Error("That dish isn't in your cart any more");
     line.quantity = qty;
     const next = lines.filter((l) => l.quantity > 0);
-    await write(cur.restaurantId, cur.restaurantName, next, { hadItems: true, previous: linesOf(cur) });
-    return { cart: await cart() };
+    const w = await write(cur.restaurantId, cur.restaurantName, next, { hadItems: true, previous: linesOf(cur), coupon: cur.coupon });
+    return { ...w, cart: await cart() };
   });
 
   const clear = serial(async () => {
     await call("flush_food_cart", {});
     conn.auth._set({ cart: {} });
+    return { cart: await cart() };
+  });
+
+  /**
+   * Coupons Swiggy offers for this cart. Swiggy itself filters these to ones
+   * that work with Pay on delivery. Needs a cart this app built, because the
+   * cart API doesn't say which restaurant it's from.
+   */
+  async function coupons() {
+    const cur = await cart();
+    if (!cur.items.length) return { coupons: [], applied: null, reason: "empty" };
+    if (!cur.restaurantId) return { coupons: [], applied: cur.coupon, reason: "notFromApp" };
+    const addressId = await swiggyLive.addressId();
+    const r = await call("fetch_food_coupons", { restaurantId: cur.restaurantId, addressId });
+    const list = [];
+    for (const sec of r.structured?.coupon_sections ?? []) {
+      const section = sec.title ?? sec.name ?? sec.section_title ?? sec.type ?? null;
+      for (const c of sec.coupons ?? []) {
+        // Swiggy sends { id, title: "FLAT30", subtitle, applicable? }: the title IS the
+        // coupon code (that's what apply_food_coupon takes); `id` is internal.
+        // No `applicable` field means not applicable yet (e.g. "Add ₹14 more").
+        const code = couponCodeOf(c) ?? (/^[A-Za-z0-9_-]{2,40}$/.test(c.title ?? "") ? c.title : null);
+        const description = String(c.subtitle ?? c.description ?? "").slice(0, 200) || null;
+        if (!code && !c.title) continue;
+        list.push({
+          code,
+          title: String(c.title ?? code).slice(0, 120),
+          description,
+          discount: Number(description?.match(/(?:save|get|flat)\s*₹\s*(\d+)/i)?.[1] ?? 0),
+          applicable: c.applicable === true,
+          section,
+        });
+      }
+    }
+    // Usable ones first, biggest saving first.
+    const rank = (c) => (c.applicable === false ? 1 : 0);
+    list.sort((a, b) => rank(a) - rank(b) || b.discount - a.discount);
+    return { coupons: list.slice(0, 20), applied: cur.coupon, reason: list.length ? null : "none" };
+  }
+
+  const applyCoupon = serial(async ({ code }) => {
+    if (typeof code !== "string" || !/^[A-Za-z0-9_-]{2,40}$/.test(code)) throw new Error("Bad coupon code");
+    const cur = await cart();
+    if (!cur.items.length) throw new Error("Your Swiggy cart is empty");
+    const addressId = await swiggyLive.addressId();
+    await call("apply_food_coupon", { couponCode: code, addressId });
+    const next = await cart();
+    if (!next.couponDiscount) throw new Error(`Swiggy didn't give a discount for ${code} on this cart`);
+    return { cart: next };
+  });
+
+  // There's no "remove coupon" tool: rebuild the same cart without it.
+  const removeCoupon = serial(async () => {
+    const cur = await cart();
+    if (!cur.restaurantId) throw new Error("This cart was set up in the Swiggy app; remove the coupon there");
+    await write(cur.restaurantId, cur.restaurantName, linesOf(cur), { hadItems: true, previous: linesOf(cur) });
     return { cart: await cart() };
   });
 
@@ -265,5 +338,5 @@ export function createSwiggyOrder(conn, swiggyLive) {
     }
   }
 
-  return { cart, addItem, setQuantity, clear, menu, place };
+  return { cart, addItem, setQuantity, clear, menu, coupons, applyCoupon, removeCoupon, place };
 }

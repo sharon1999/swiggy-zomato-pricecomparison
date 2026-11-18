@@ -183,6 +183,65 @@ function MenuList() {
   );
 }
 
+function Coupons() {
+  const c = useCart();
+  const s = c.coupons;
+  const d = c.data;
+  if (!s) return null;
+  const applied = d.coupon;
+  return (
+    <div className="grid gap-1.5 rounded-[10px] border border-line bg-bg px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2 text-[13px] font-bold">
+        <span>🏷️ Coupons</span>
+        {s.loading && <span className="text-xs font-normal text-muted">checking…</span>}
+      </div>
+      {applied && (
+        <div className="flex items-center justify-between gap-2 rounded-lg bg-accent-soft px-2 py-1.5 text-[13px]">
+          <span>
+            <b className="text-accent">{applied}</b> applied · you save <b>{rs(d.couponDiscount)}</b>
+          </span>
+          {d.restaurantId && (
+            <LinkButton disabled={c.busy} onClick={c.removeCoupon}>
+              Remove
+            </LinkButton>
+          )}
+        </div>
+      )}
+      {s.error ? (
+        <div className="text-xs text-muted">Couldn't load coupons: {s.error}</div>
+      ) : s.reason === "notFromApp" ? (
+        <div className="text-xs text-muted">This cart was made in the Swiggy app, so see its coupons there.</div>
+      ) : s.coupons?.length ? (
+        <div className="grid max-h-[220px] gap-1 overflow-y-auto">
+          {s.coupons.map((k, n) => {
+            const on = applied && k.code && applied.toUpperCase() === k.code.toUpperCase();
+            return (
+              <div key={`${k.code ?? k.title}:${n}`} className={cx("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-1 text-[13px]", !k.applicable && !on && "opacity-60")}>
+                <div className="min-w-0">
+                  <div className="font-semibold">
+                    {k.code && <span className="mr-1.5 rounded border border-dashed border-swiggy px-1 text-xs text-swiggy">{k.code}</span>}
+                    {k.code ? (k.title !== k.code ? k.title : "") : k.title}
+                  </div>
+                  {k.description && <div className={cx("text-xs", k.applicable ? "text-accent" : "text-muted")}>{k.description}</div>}
+                </div>
+                {on ? (
+                  <span className="text-xs font-semibold text-accent">Applied</span>
+                ) : k.code && k.applicable ? (
+                  <Button variant="swiggyOutline" size="xs" disabled={c.busy || s.loading} onClick={() => c.applyCoupon(k.code)}>
+                    {k.discount ? `Apply · −${rs(k.discount)}` : "Apply"}
+                  </Button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        !s.loading && !applied && <div className="text-xs text-muted">No Pay-on-delivery coupons for this cart right now.</div>
+      )}
+    </div>
+  );
+}
+
 function Row({ label, children, strong }) {
   return (
     <div className={cx("flex justify-between gap-2", strong && "text-base font-extrabold text-ink")}>
@@ -192,7 +251,7 @@ function Row({ label, children, strong }) {
   );
 }
 
-function Bill({ p, coupon }) {
+function Bill({ p, coupon, code }) {
   return (
     <div className="grid gap-0.5 border-t border-dashed border-line pt-2 text-[13px] text-muted">
       <Row label="Item total">{rs(p.itemTotal)}</Row>
@@ -206,7 +265,7 @@ function Bill({ p, coupon }) {
         )}
       </Row>
       <Row label="Taxes & charges">₹{p.taxes}</Row>
-      {coupon ? <Row label="Coupon">− {rs(coupon)}</Row> : null}
+      {coupon ? <Row label={`Coupon${code ? ` (${code})` : ""}`}>− {rs(coupon)}</Row> : null}
       <Row label="To pay" strong>
         {rs(p.toPay)}
       </Row>
@@ -239,7 +298,8 @@ function FilledCart() {
       ) : (
         <div className="text-xs text-muted">This cart was set up in the Swiggy app, so change its items there, or empty it to start one here.</div>
       )}
-      {p && <Bill p={p} coupon={d.couponDiscount} />}
+      <Coupons />
+      {p && <Bill p={p} coupon={d.couponDiscount} code={d.coupon} />}
       {d.deliverTo && <div className="text-xs text-muted">🛵 {d.deliverTo}</div>}
       <input
         className="w-full rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] outline-none focus:border-accent"
